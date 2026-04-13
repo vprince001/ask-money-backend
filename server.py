@@ -22,8 +22,10 @@ import re
 from jose import jwt
 from google.oauth2 import id_token as google_id_token
 from google.auth.transport import requests as google_requests
-from transcription_service import preload_model
 from services.llm_parser import parse_expense_with_llm
+from openai import OpenAI
+import tempfile
+
 
 # Auth configuration
 GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
@@ -635,43 +637,32 @@ async def list_archived_groups(current_user: User = Depends(get_current_user)):
 
 # ============= VOICE TRANSCRIPTION =============
 
+client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+
 @api_router.post("/voice/transcribe")
 async def transcribe_audio(data: AudioTranscribeRequest, current_user: User = Depends(get_current_user)):
-    """Transcribe audio using local Faster Whisper model (base64 input)"""
-    from transcription_service import (
-        transcribe_audio_file, validate_file_size,
-        save_temp_audio, cleanup_temp_file,
-    )
-
-    temp_path = None
     try:
-        # Decode base64 audio
+        # Decode base64
         audio_bytes = base64.b64decode(data.audio_base64)
 
-        # Validate file size
-        if not validate_file_size(len(audio_bytes)):
-            raise HTTPException(status_code=400, detail="Audio file too large (max 25MB)")
+        # Save temp file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".m4a") as tmp:
+            tmp.write(audio_bytes)
+            tmp_path = tmp.name
 
-        # Save temporarily
-        temp_path = save_temp_audio(audio_bytes, ".m4a")
+        # Send to OpenAI
+        with open(tmp_path, "rb") as audio_file:
+            transcript = client.audio.transcriptions.create(
+                model="gpt-4o-transcribe",
+                file=audio_file,
+                language=data.language or "en"
+            )
 
-        # Transcribe with Faster Whisper
-        logger.info(f"data.language: {data.language}")
-        language = data.language if data.language in ["en", "hi"] else None
-        logger.info(f"language: {language}")
-        result = transcribe_audio_file(temp_path, language=language)
-        logger.info(f"Transcription successful: {result['text']}")
+        return {"text": transcript.text}
 
-        return {"text": result["text"]}
-
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Transcription error: {str(e)}")
         raise HTTPException(status_code=400, detail=f"Failed to transcribe audio: {str(e)}")
-    finally:
-        if temp_path:
-            cleanup_temp_file(temp_path)
 
 
 @api_router.post("/transcribe")
@@ -1557,7 +1548,3 @@ app.add_middleware(
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
-
-@app.on_event("startup")
-async def preload_whisper_model():
-    preload_model()
