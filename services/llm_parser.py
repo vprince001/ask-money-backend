@@ -72,7 +72,7 @@ OUTPUT FORMAT:
     response = client.chat.completions.create(
         model="gpt-4o-mini",  # fast + cheap
         messages=[
-            {"role": "system", "content": "You are a precise financial data extractor."},
+            {"role": "system", "content": "You must return STRICT JSON only. No text, no explanation. Always valid JSON."},
             {"role": "user", "content": prompt}
         ],
         temperature=0
